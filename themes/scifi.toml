@@ -1,0 +1,112 @@
+# =============================================================================
+# themes/scifi.toml — Sci-fi theme data for history_engine.
+#
+# Loaded by worldgen.py via load_theme("scifi").
+# Adding a new theme requires only creating a new file here — no code changes.
+#
+# Sections:
+#   [names]              — syllable pools for algorithmic name generation
+#   [features]           — terrain / landmark / modifier pools
+#   [features.exclusions]— incompatible (category, value, category, value) pairs
+#   [features.capital]   — guaranteed landmark for capital nodes
+#   [resources]          — resource names and maximum quantities per node
+# =============================================================================
+
+
+# =============================================================================
+# NAME GENERATION
+#
+# Names are built by concatenating syllables:
+#   prefix + middle (0–1) + suffix
+#
+# The generator picks one from each pool. Seed-deterministic.
+# Add or remove fragments freely — more fragments = more variety.
+# =============================================================================
+
+[names]
+prefix = [
+    "Nex",  "Cryo", "Sol",  "Void", "Plex",
+    "Heli", "Zeta", "Flux", "Arc",  "Syn",
+    "Xen",  "Quar", "Vek",  "Axio", "Tach",
+    "Phor", "Kyr",  "Omni", "Pyr",  "Lux",
+]
+middle = [
+    "an",  "or",  "ix",  "us",  "el",
+    "ar",  "ion", "al",  "is",  "um",
+    "ax",  "en",  "os",  "ir",  "yx",
+]
+suffix = [
+    "prime","gate", "port", "core", "reach",
+    "nexus","hub",  "forge","array","vault",
+    "ring", "node", "well", "lock", "drift",
+    "spire","arc",  "lens", "ward", "fall",
+]
+
+
+# =============================================================================
+# FEATURES
+#
+# Nodes are assigned features from three categories:
+#   terrain  — exactly 1 per node (the fundamental landscape)
+#   landmark — 0 or 1 per node (~60% chance)
+#   modifier — 0 or 1 per node (~40% chance)
+#
+# Capital nodes always receive the capital landmark (see [features.capital]).
+#
+# Add or remove entries freely. More entries = more variety.
+# =============================================================================
+
+[features]
+terrain = [
+    "asteroid",      "moon",         "gas_giant_orbit", "nebula",
+    "ring_system",   "void",         "irradiated_zone", "ice_world",
+    "desert_world",  "ocean_world",  "jungle_world",    "rocky_planetoid",
+]
+landmark = [
+    "shipyard",      "reactor",      "data_nexus",    "orbital_ring",
+    "derelict",      "beacon",       "mining_rig",    "relay_station",
+    "habitat_dome",  "weapons_platform","research_lab","trade_hub",
+]
+modifier = [
+    "resource_rich",  "unstable",      "heavily_fortified", "abandoned",
+    "irradiated",     "contested",     "deep_space",        "tidally_locked",
+    "storm_wracked",  "sensor_dead",   "high_gravity",      "low_orbit",
+]
+
+# Incompatible (category, value, category, value) pairs.
+# The generator re-rolls if it draws an excluded combo.
+# Format: each entry is [category_a, value_a, category_b, value_b]
+# meaning "value_a in category_a is incompatible with value_b in category_b".
+# Add new exclusions freely. Keep it to genuinely nonsensical combos —
+# weird-but-plausible pairings often produce the best narration.
+exclusions = [
+    # terrain        vs modifier
+    ["terrain", "void",           "modifier", "high_gravity"],
+    ["terrain", "nebula",         "modifier", "high_gravity"],
+    ["terrain", "ring_system",    "modifier", "high_gravity"],
+    ["terrain", "asteroid",       "modifier", "high_gravity"],
+    ["terrain", "ice_world",      "modifier", "irradiated"],
+    # terrain        vs landmark
+    ["terrain", "void",           "landmark", "mining_rig"],
+    ["terrain", "nebula",         "landmark", "mining_rig"],
+    ["terrain", "void",           "landmark", "habitat_dome"],
+]
+
+# The landmark guaranteed to appear on capital nodes.
+[features.capital]
+landmark = "command_hub"
+
+
+# =============================================================================
+# RESOURCES
+#
+# Resource types present in this theme and the maximum quantity per node.
+# Each node is assigned a random quantity in [0, max] for each resource type.
+# Add or remove resource types freely — the sim treats them generically.
+# =============================================================================
+
+[resources]
+volitiles  = 5
+metals   = 4
+semimatter = 3
+gold   = 2
