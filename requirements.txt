@@ -1,0 +1,10 @@
+anthropic
+fastapi
+networkx
+numpy
+psycopg2-binary
+pydantic
+python-dotenv
+rich
+sqlalchemy
+uvicorn[standard]
