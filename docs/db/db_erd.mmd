@@ -1,0 +1,115 @@
+erDiagram
+    simulation_runs ||--o{ run_entities : has
+    simulation_runs ||--o{ world_nodes : has
+    simulation_runs ||--o{ world_edges : has
+    simulation_runs ||--o{ significant_events : records
+    significant_events ||--o| narrations : narrates
+    significant_events ||--o{ event_world_snapshots : captures
+    significant_events ||--o{ event_entity_snapshots : captures
+    significant_events ||--o{ event_relation_snapshots : captures
+
+    simulation_runs {
+        int id PK
+        int seed
+        string theme
+        string narrator_style
+        string model
+        int turn_count
+        int entity_count
+        int node_count
+        float edge_density
+        datetime started_at
+        datetime finished_at
+        string status
+        boolean early_end
+        string output_md_path
+        string output_jsonl_path
+        jsonb config
+        jsonb meta
+        datetime created_at
+    }
+
+    run_entities {
+        int id PK
+        int run_id FK
+        string name
+        string archetype
+        boolean alive
+        string capital_node_name
+        jsonb personality
+        jsonb initial_resources
+        jsonb final_resources
+    }
+
+    world_nodes {
+        int id PK
+        int run_id FK
+        string name
+        string initial_owner
+        string final_owner
+        boolean is_capital
+        jsonb resources
+        jsonb features
+    }
+
+    world_edges {
+        int id PK
+        int run_id FK
+        string node_a
+        string node_b
+        float traversal_cost
+    }
+
+    significant_events {
+        int id PK
+        int run_id FK
+        int turn
+        int event_index
+        string event_type
+        string actor
+        string target_entity
+        string target_node
+        text description
+        jsonb metadata
+        jsonb raw_record
+        datetime created_at
+    }
+
+    narrations {
+        int id PK
+        int event_id FK
+        string narrator_style
+        string model
+        text narration_text
+        int prompt_tokens
+        int output_tokens
+        text narration_error
+        datetime created_at
+    }
+
+    event_world_snapshots {
+        int id PK
+        int event_id FK
+        string node_name
+        string owner
+        boolean is_capital
+        jsonb resources
+        jsonb features
+    }
+
+    event_entity_snapshots {
+        int id PK
+        int event_id FK
+        string entity_name
+        boolean alive
+        jsonb resources
+        int node_count
+    }
+
+    event_relation_snapshots {
+        int id PK
+        int event_id FK
+        string entity_a
+        string entity_b
+        float score
+    }
