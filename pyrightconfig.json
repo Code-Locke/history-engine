@@ -1,5 +1,5 @@
 {
   "pythonVersion": "3.12",
-  "include": ["engine"],
-  "extraPaths": ["engine"]
+  "include": ["engine", "api"],
+  "extraPaths": ["engine", "api"]
 }
