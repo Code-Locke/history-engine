@@ -1,0 +1,194 @@
+# =============================================================================
+# config.toml — history_engine simulation configuration
+#
+# This file is the single source of truth for all tunable values.
+# config.py loads, validates, and exposes these as a typed SimConfig object.
+#
+# Sections:
+#   [simulation]   — top-level loop settings
+#   [world]        — world graph generation parameters
+#   [narrator]     — LLM model and narration settings
+#   [utility]      — action scoring weights and softmax temperature
+#   [combat]       — attack resolution parameters
+#   [diplomacy]    — treaty and alliance resolution parameters
+#   [events]       — significance detection thresholds
+# =============================================================================
+
+
+# -----------------------------------------------------------------------------
+# Simulation
+# -----------------------------------------------------------------------------
+
+[simulation]
+
+# Total number of turns to run before the simulation ends.
+turn_count = 100
+
+# Number of entities to place in the world at the start.
+# Must be >= 2.
+entity_count = 5
+
+# Random seed for reproducibility. Set to -1 to use a random seed each run.
+random_seed = -1
+
+
+# -----------------------------------------------------------------------------
+# World generation
+# -----------------------------------------------------------------------------
+
+[world]
+
+# Total number of nodes in the world graph.
+# Must be > entity_count (each entity needs at least a capital to start).
+node_count = 100
+
+# Probability that any two non-adjacent nodes will be connected by an edge,
+# after the initial spanning tree is laid down (which guarantees connectivity).
+# Range: [0.0, 1.0]. Higher = denser, more interconnected map.
+edge_density = 0.1
+
+# Traversal cost range for generated edges [min, max].
+# Assigned uniformly at random within this range.
+traversal_cost_min = 1
+traversal_cost_max = 10
+
+
+# -----------------------------------------------------------------------------
+# Narrator (LLM)
+# -----------------------------------------------------------------------------
+
+[narrator]
+
+# Anthropic model to use for narration.
+# Must be a valid model string.
+model = "claude-sonnet-4-6"
+
+# Maximum tokens for a single narration response.
+max_tokens = 512
+
+# Number of recent entity history events to include in the narrator prompt.
+# Higher = more context, higher cost per LLM call.
+history_context_turns = 5
+
+# Number of recent node history events to include in the narrator prompt.
+node_history_context_turns = 3
+
+# Narrator style. Controls the register and tone of all LLM narrations.
+# Style prompt blocks are defined in presets.toml under [narrator_styles.*].
+# If a style is missing an event label, it falls back to the chronicle value.
+# Valid values: chronicle, mythic, clinical, noir, wikipedia, sibylline, elegy, 
+# Valid values: scripture, gossip
+narrator_style = "gossip"
+
+
+# -----------------------------------------------------------------------------
+# Utility scoring
+# -----------------------------------------------------------------------------
+
+[utility]
+
+# Softmax temperature for action selection.
+# < 1.0 → more deterministic (favours highest-scoring action)
+# = 1.0 → balanced variance
+# > 1.0 → more random (more surprise events)
+# Must be > 0.
+softmax_temperature = 1.0
+
+# Floor score before personality modifiers.
+# Keeps every legal action at least slightly possible via softmax.
+# Must be > 0.
+base_score = 0.1
+
+# --- Explore scoring ---
+# Added per unexplored neighbour node.
+unexplored_bonus_scale = 0.15
+
+# --- Expand scoring ---
+# Added per resource point available on claimable neutral nodes.
+neutral_resource_scale = 0.05
+
+# --- Exploit scoring ---
+# Added per harvestable resource point across owned nodes.
+exploit_resource_scale = 0.04
+
+# --- Attack scoring ---
+# Multiplied by abs(negative relation) toward the target.
+hostility_attack_bonus = 0.30
+
+# Attack bonus/penalty derived from relative resource strength.
+power_ratio_scale = 0.25
+
+# How strongly paranoia discounts risky attacks (when outmatched).
+paranoia_discount_scale = 0.50
+
+# --- Diplomacy scoring ---
+# How much existing warmth boosts the score for proposing a treaty.
+relation_treaty_bonus = 0.20
+
+# How much existing warmth boosts the score for offering an alliance.
+relation_alliance_bonus = 0.30
+
+# Minimum relation value before alliance scoring activates.
+# Below this threshold, alliance score is floored at base_score * 0.5.
+alliance_warmth_threshold = 0.1
+
+# How much paranoia pushes an entity toward diplomatic actions.
+diplomacy_paranoia_bonus = 0.25
+
+
+# -----------------------------------------------------------------------------
+# Combat
+# -----------------------------------------------------------------------------
+
+[combat]
+
+# Floor and ceiling for all random probability draws.
+# Keeps outcomes from being fully deterministic at the extremes.
+# prob_min must be in (0.0, 0.5), prob_max must be in (0.5, 1.0).
+prob_min = 0.05
+prob_max = 0.95
+
+# Flat bonus to the attacker's win probability when the defender
+# has zero resources. Rewards pressing a weakened enemy.
+# Must be in [0.0, 1.0].
+zero_resource_defense_penalty = 0.30
+
+# Relation shift applied to both sides after any attack resolves.
+# Should be negative — attacks damage relations.
+attack_relation_delta = -0.15
+
+
+# -----------------------------------------------------------------------------
+# Diplomacy
+# -----------------------------------------------------------------------------
+
+[diplomacy]
+
+# Relation delta applied when a treaty proposal is accepted.
+treaty_delta_accept = 0.20
+
+# Relation delta applied when a treaty proposal is rejected.
+# Should be negative — being rebuffed breeds resentment.
+treaty_delta_reject = -0.05
+
+# Relation delta applied when an alliance offer is accepted.
+alliance_delta_accept = 0.40
+
+# Relation delta applied when an alliance offer is rejected.
+alliance_delta_reject = -0.05
+
+
+# -----------------------------------------------------------------------------
+# Event significance thresholds
+# -----------------------------------------------------------------------------
+
+[events]
+
+# Relation value at or below which an attack triggers a war_declared event.
+# Should be negative. Mirrors RelationshipMatrix.is_hostile() threshold.
+war_threshold = -0.3
+
+# Attacker win probability at or above which a failed attack (defender survives)
+# triggers a near_death_survived event.
+# Range: (0.5, 1.0).
+near_death_win_prob_threshold = 0.70

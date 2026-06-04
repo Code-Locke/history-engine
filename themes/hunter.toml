@@ -1,0 +1,133 @@
+# =============================================================================
+# themes/korean_hunter.toml — Korean Hunter Novel theme for history_engine.
+#
+# Inspired by the "hunter/gate" genre (e.g. Solo Leveling, Omniscient Reader,
+# etc.). A modern world fractured by dimensional Gates and the Dungeons within
+# them. Hunters are ranked individuals who clear Dungeons for resources and
+# power. Guilds, government bureaus, and rival factions compete for territory.
+#
+# Loaded by worldgen.py via load_theme("korean_hunter").
+# Adding a new theme requires only creating a new file here — no code changes.
+#
+# Sections:
+#   [names]              — syllable pools for algorithmic name generation
+#   [features]           — terrain / landmark / modifier pools
+#   [features.exclusions]— incompatible (category, value, category, value) pairs
+#   [features.capital]   — guaranteed landmark for capital nodes
+#   [resources]          — resource names and maximum quantities per node
+#                          *** PLACEHOLDER — adjust to taste ***
+# =============================================================================
+
+
+# =============================================================================
+# NAME GENERATION
+#
+# Names are built by concatenating syllables:
+#   prefix + middle (0–1) + suffix
+#
+# The generator picks one from each pool. Seed-deterministic.
+# Syllables are drawn from romanized Korean phonetics, producing
+# plausible Korean-sounding district and location names.
+# Add or remove fragments freely — more fragments = more variety.
+# =============================================================================
+
+[names]
+prefix = [
+    "Gang",  "Dong",  "Song",  "Jung",  "Gwang",
+    "Seo",   "Buk",   "Nam",   "Eun",   "Cheon",
+    "Hwa",   "Yon",   "Han",   "Dae",   "Jam",
+    "Gil",   "Hae",   "In",    "Bok",   "Gwan",
+]
+middle = [
+    "am",  "eun",  "il",  "ok",  "ung",
+    "an",  "eo",   "u",   "ae",  "al",
+    "on",  "im",   "ul",  "ang", "og",
+]
+suffix = [
+    "dong",   "ro",     "gu",      "si",     "cheon",
+    "gang",   "san",    "won",     "mun",    "gwan",
+    "dae",    "jeong",  "po",      "gok",    "ju",
+    "bong",   "nyeong", "teo",     "mal",    "hyeon",
+]
+
+
+# =============================================================================
+# FEATURES
+#
+# Nodes are assigned features from three categories:
+#   terrain  — exactly 1 per node (the fundamental landscape)
+#   landmark — 0 or 1 per node (~60% chance)
+#   modifier — 0 or 1 per node (~40% chance)
+#
+# Capital nodes always receive the capital landmark (see [features.capital]).
+#
+# The terrain here reflects a modern Korean urban/suburban world scarred by
+# Gate appearances and dungeon incursions. Landmarks are infrastructure and
+# hunter-specific facilities. Modifiers reflect the state of a zone after
+# years of Gate activity.
+#
+# Add or remove entries freely. More entries = more variety.
+# =============================================================================
+
+[features]
+terrain = [
+    "urban_district",   "industrial_zone",  "coastal_port",     "mountain_ridge",
+    "river_basin",      "underground_rail", "suburban_sprawl",  "reclaimed_zone",
+    "forest_reserve",   "island_outpost",   "highway_corridor", "crater_field",
+]
+landmark = [
+    "active_gate",      "sealed_gate",      "dungeon_entrance", "guild_hall",
+    "hunter_bureau",    "rank_exam_center", "black_market",     "field_hospital",
+    "military_post",    "mana_lab",         "monitoring_tower", "evacuation_hub",
+]
+modifier = [
+    "mana_saturated",   "quarantined",      "guild_controlled", "government_held",
+    "contested",        "scorched",         "overgrown",        "heavily_fortified",
+    "abandoned",        "refugee_dense",    "under_incursion",  "stabilized",
+]
+
+# Incompatible (category, value, category, value) pairs.
+# The generator re-rolls if it draws an excluded combo.
+# Format: each entry is [category_a, value_a, category_b, value_b]
+# meaning "value_a in category_a is incompatible with value_b in category_b".
+exclusions = [
+    # A sealed gate should not simultaneously be under active incursion
+    ["landmark", "sealed_gate",       "modifier", "under_incursion"],
+    # Stabilized zones shouldn't also be under active incursion
+    ["modifier", "stabilized",        "modifier", "under_incursion"],
+    # Crater fields are too devastated to be stabilized
+    ["terrain",  "crater_field",      "modifier", "stabilized"],
+    # An island outpost is unlikely to host an underground rail
+    ["terrain",  "island_outpost",    "terrain",  "underground_rail"],
+    # Quarantined zones are not accessible enough for black markets (officially)
+    ["modifier", "quarantined",       "landmark", "black_market"],
+    # Scorched terrain and refugee density don't mix
+    ["modifier", "scorched",          "modifier", "refugee_dense"],
+]
+
+# The landmark guaranteed to appear on capital nodes.
+# Guild Association HQ serves as the seat of power in hunter society.
+[features.capital]
+landmark = "guild_association_hq"
+
+
+# =============================================================================
+# RESOURCES
+#
+# *** PLACEHOLDER — the user will define these. ***
+#
+# Suggestions for the genre:
+#   mana_crystal   — primary dungeon drop, used for everything
+#   beast_core     — dropped by monsters, refined into equipment
+#   rank_stone     — rare awakening material, grants or upgrades hunter rank
+#   artifact_shard — fragments of dungeon boss loot, high-value trade good
+#
+# Each node is assigned a random quantity in [0, max] for each resource type.
+# Add or remove resource types freely — the sim treats them generically.
+# =============================================================================
+
+[resources]
+mana_crystal  = 5
+beast_core    = 4
+rank_stone    = 3
+artifact_shard = 2
