@@ -1,559 +1,469 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 
-// world.json의 상세 국가 노드 규격 반영
-interface NodeData {
-  id: string | number;
+// ── 데이터 구조 인터페이스 정의 ──
+interface WorldNode {
   name: string;
-  x?: number;
-  y?: number;
-  color?: string;
-  is_capital?: boolean;
-  features?: string[] | string;
-  resources?: any; 
-  explored_by?: string[] | string;
-  description?: string;
-  [key: string]: any; 
+  owner: string | null;
+  is_capital: boolean;
+  resources: Record<string, any>;
+  features: string[];
+  x?: number; 
+  y?: number; 
 }
 
-interface EdgeData {
-  source: string | number;
-  target: string | number;
-}
-
-interface WorldData {
-  theme?: string;
-  seed?: number;
-  totalTurns?: number;
-  nodes?: NodeData[];
-  edges?: EdgeData[];
-  [key: string]: any; 
-}
-
-interface ParsedTurn {
+interface TimelineEvent {
   id: number;
-  title: string;
-  content: string;
+  turn: number;
+  event_type: string;
+  actor: string;
+  description: string;
+  narration?: string | NarrationObject | null;
 }
 
-const DEFAULT_MAP_DATA: WorldData = {
-  theme: "fantasyStyle",
-  seed: 395558637,
-  nodes: [
-    { id: "node_1", name: "Thornhold", color: '#f59e0b', is_capital: true, features: ["Mountain Fortress"], resources: ["iron", "grain"], explored_by: ["Thornhold Pioneer"] },
-    { id: "node_2", name: "Dawngate", color: '#3b82f6', is_capital: false, features: ["Coastal Port"], resources: ["grain", "gold", "gold"], explored_by: ["Dawngate Scout"] },
-    { id: "node_3", name: "Drakeanhaven", color: '#374151', is_capital: true, features: ["Dragon Nest"], resources: { iron: 3, timber: 1, gold: 5 }, explored_by: ["Royal Expedition"] },
-    { id: "node_4", name: "Ravenilkeep", color: '#10b981', is_capital: false, features: ["Dense Forest"], resources: "timber, timber", explored_by: ["Raven Ranger"] },
-    { id: "node_5", name: "Grimarmark", color: '#dc2626', is_capital: false, features: ["Glacier Valley"], resources: ["iron", "gold"], explored_by: ["Tundra Nomad"] }
-  ],
-  edges: [
-    { source: "node_1", target: "node_2" },
-    { source: "node_3", target: "node_4" },
-    { source: "node_2", target: "node_5" }
-  ]
-};
+interface EntityStatus {
+  name: string;
+  alive: boolean;
+  resources: Record<string, any>;
+  node_count: number;
+}
 
-function App() {
-  const [worldData, setWorldData] = useState<WorldData | null>(null);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [zoomScale, setZoomScale] = useState<number>(1);
-  
-  // 선택된 노드의 ID 상태 관리
-  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-  
-  const [turns, setTurns] = useState<ParsedTurn[]>([]);
-  const [selectedTurn, setSelectedTurn] = useState<number>(1);
+interface NarrationObject {
+  narration_text: string;
+}
 
-  const viewportRef = useRef<HTMLDivElement>(null);
+interface SnapshotData {
+  event_id: number;
+  turn: number;
+  narration: string | NarrationObject | null;
+  world_snapshot: WorldNode[];
+  entity_snapshot: EntityStatus[];
+  relations_snapshot?: Record<string, Record<string, number>>;
+}
 
-  const handleZoomIn = () => setZoomScale(prev => Math.min(prev + 0.1, 2.5));
-  const handleZoomOut = () => setZoomScale(prev => Math.max(prev - 0.1, 0.4));
-  const handleZoomReset = () => setZoomScale(1.0);
+export default function App() {
+  const [timelineEvents, setTimelineEvents] = useState<TimelineEvent[]>([]);
+  // '턴' 중심이 아닌 '이벤트 ID' 중심으로 활성화 상태 관리 (같은 턴 내 개별 이벤트 분리 선택 가능)
+  const [activeEventId, setActiveEventId] = useState<number | null>(null);
+  const [snapshot, setSnapshot] = useState<SnapshotData | null>(null);
+  const [loading, setLoading] = useState<boolean>(false);
 
-  // 마크다운 파서
-  const parseMarkdownTurns = (text: string): ParsedTurn[] => {
-    if (!text) return [];
-    const turnSections = text.split(/(?=###\s*Turn\s*\d+)/i);
-    const parsed: ParsedTurn[] = [];
+  // 🔍 지도 확대/축소 및 드래그 제어 상태
+  const [zoom, setZoom] = useState({ scale: 1, x: 0, y: 0 });
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
 
-    turnSections.forEach((section) => {
-      const trimmed = section.trim();
-      if (!trimmed) return;
+  // 🖱️ 호버(Hover) 노드 정보 툴팁 상태 관리
+  const [hoveredNode, setHoveredNode] = useState<WorldNode | null>(null);
+  const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
 
-      const match = trimmed.match(/###\s*Turn\s*(\d+)/i);
-      if (match) {
-        const turnId = parseInt(match[1], 10);
-        const lines = trimmed.split('\n');
-        const firstLine = lines[0].replace(/###/g, '').trim();
-        const contentBody = lines.slice(1).join('\n').trim();
+  const mainPanelRef = useRef<HTMLDivElement | null>(null);
 
-        parsed.push({
-          id: turnId,
-          title: firstLine,
-          content: contentBody
-        });
-      }
-    });
-    return parsed.sort((a, b) => a.id - b.id);
-  };
-
-  // 데이터 보정 및 좌표 비중첩 정렬 가동
-  const positionedNodes = useMemo(() => {
-    if (!worldData || !worldData.nodes) return [];
-    const rawNodes = worldData.nodes;
-    const finalNodes: Array<NodeData & { x: number; y: number }> = [];
-    
-    const minX = 250, maxX = 950;
-    const minY = 200, maxY = 700;
-    const MIN_DISTANCE = 170; 
-
-    rawNodes.forEach((node, index) => {
-      const safeId = node.id !== undefined && node.id !== null ? String(node.id) : `node_idx_${index}_${node.name || 'unknown'}`;
-      const safeName = node.name || `Region ${safeId}`;
-
-      if (node.x !== undefined && node.y !== undefined) {
-        finalNodes.push({ ...node, id: safeId, name: safeName, x: node.x, y: node.y });
-        return;
-      }
-
-      let placed = false;
-      let attempts = 0;
-      let randX = 0;
-      let randY = 0;
-
-      while (!placed && attempts < 500) {
-        randX = Math.floor(Math.random() * (maxX - minX + 1)) + minX;
-        randY = Math.floor(Math.random() * (maxY - minY + 1)) + minY;
-
-        const isTooClose = finalNodes.some((placedNode) => {
-          const dx = placedNode.x - randX;
-          const dy = placedNode.y - randY;
-          return Math.sqrt(dx * dx + dy * dy) < MIN_DISTANCE;
-        });
-
-        if (!isTooClose) {
-          placed = true;
-        }
-        attempts++;
-      }
-      finalNodes.push({ ...node, id: safeId, name: safeName, x: randX, y: randY });
-    });
-    return finalNodes;
-  }, [worldData]);
-
-  // 선택된 국가 세부 데이터 바인딩
-  const activeNodeDetails = useMemo(() => {
-    if (!selectedNodeId) return null;
-    return positionedNodes.find(n => String(n.id) === String(selectedNodeId)) || null;
-  }, [selectedNodeId, positionedNodes]);
-
-  // 정중앙 시작 스크롤 포커싱
+  // 1. 최초 컴포넌트 마운트 시 이벤트 목록 로드
   useEffect(() => {
-    if (!loading && viewportRef.current && positionedNodes.length > 0) {
-      const sumX = positionedNodes.reduce((acc, n) => acc + n.x, 0);
-      const sumY = positionedNodes.reduce((acc, n) => acc + n.y, 0);
-      const centerX = sumX / positionedNodes.length;
-      const centerY = sumY / positionedNodes.length;
-
-      const clientWidth = viewportRef.current.clientWidth;
-      const clientHeight = viewportRef.current.clientHeight;
-
-      viewportRef.current.scrollLeft = centerX - clientWidth / 2;
-      viewportRef.current.scrollTop = centerY - clientHeight / 2;
-    }
-  }, [loading, positionedNodes]);
-
-  const loadData = async () => {
-    try {
-      setLoading(true);
-      const [worldRes, chronicleRes] = await Promise.all([
-        fetch('http://localhost:8000/data/world.json'),
-        fetch('http://localhost:8000/data/latest-chronicle')
-      ]);
-
-      if (!worldRes.ok) throw new Error('world.json 로딩 실패');
-
-      const worldJson = await worldRes.json();
-      
-      if (!worldJson.nodes) {
-        worldJson.nodes = worldJson.factions || worldJson.locations || DEFAULT_MAP_DATA.nodes;
-        worldJson.edges = worldJson.connections || DEFAULT_MAP_DATA.edges;
-      }
-      setWorldData(worldJson);
-
-      if (chronicleRes.ok) {
-        const mdText = await chronicleRes.text();
-        const parsedTurns = parseMarkdownTurns(mdText);
-        setTurns(parsedTurns);
-        if (parsedTurns.length > 0) {
-          setSelectedTurn(parsedTurns[0].id);
+    fetch('http://localhost:8000/api/simulations/latest/events')
+      .then((res) => {
+        if (!res.ok) throw new Error("API 서버 연결 실패");
+        return res.json();
+      })
+      .then((data) => {
+        if (Array.isArray(data)) {
+          // 타임라인 순서대로 정렬
+          const sortedData = data.sort((a, b) => a.turn - b.turn || a.id - b.id);
+          setTimelineEvents(sortedData);
+          if (sortedData.length > 0) {
+            setActiveEventId(sortedData[0].id); // 첫 번째 이벤트 개별 활성화
+          }
         }
-      }
-    } catch (err: any) {
-      setWorldData(DEFAULT_MAP_DATA);
-      const fallbackMarkdown = `### Turn 1 / 100\n| Entity | Action |\n| Thornhold | PROPOSE_TREATY |`;
-      setTurns(parseMarkdownTurns(fallbackMarkdown));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    loadData();
+      })
+      .catch((err) => console.error("타임라인 데이터 로드 실패:", err));
   }, []);
 
-  const edges = worldData?.edges || [];
-  const currentTurnData = turns.find(t => t.id === selectedTurn);
+  // 2. 선택된 개별 이벤트 고유 ID에 따른 스냅샷 실시간 로드
+  useEffect(() => {
+    if (!activeEventId) {
+      setSnapshot(null);
+      return;
+    }
 
-  const renderAttribute = (attr: any) => {
-    if (!attr) return 'None';
-    if (Array.isArray(attr)) return attr.join(', ');
-    return String(attr);
-  };
+    setLoading(true);
+    fetch(`http://localhost:8000/api/events/${activeEventId}/snapshot`)
+      .then((res) => {
+        if (!res.ok) throw new Error("스냅샷 응답 실패");
+        return res.json();
+      })
+      .then((data) => {
+        setSnapshot(data);
+        setLoading(false);
+      })
+      .catch((err) => {
+        console.error("스냅샷 로드 오류:", err);
+        setLoading(false);
+      });
+  }, [activeEventId]);
 
-  // 💡 [수정 핵심] 보유 여부 문구 대신 수량(숫자)을 집계하여 출력하는 자원 해석기
-  const renderCategorizedResources = (node: NodeData) => {
-    const rawData = node.resources ?? node.resource ?? node.productions ?? node.resource_list ?? null;
-    
-    // 자원별 수량을 보관할 맵 초기화
-    const resourceCounts: Record<string, number> = {
-      grain: 0,
-      iron: 0,
-      timber: 0,
-      gold: 0
+  // 🛠️ 마우스 휠 패시브 스크롤 브라우저 에러 차단
+  useEffect(() => {
+    const panel = mainPanelRef.current;
+    if (!panel) return;
+
+    const handleNativeWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const zoomFactor = 1.15;
+      setZoom(prev => {
+        let nextScale = prev.scale;
+        if (e.deltaY < 0) {
+          nextScale = Math.min(prev.scale * zoomFactor, 8);
+        } else {
+          nextScale = Math.max(prev.scale / zoomFactor, 0.4);
+        }
+        return { ...prev, scale: nextScale };
+      });
     };
 
-    let debugRawString = '';
+    panel.addEventListener('wheel', handleNativeWheel, { passive: false });
+    return () => panel.removeEventListener('wheel', handleNativeWheel);
+  }, []);
 
-    if (rawData) {
-      if (Array.isArray(rawData)) {
-        // 1. 배열 형태일 때: ["iron", "grain", "iron"] -> 각 아이템 개수 합산
-        debugRawString = JSON.stringify(rawData);
-        rawData.forEach(item => {
-          const name = String(item).toLowerCase().trim();
-          Object.keys(resourceCounts).forEach(key => {
-            if (name.includes(key)) {
-              resourceCounts[key] += 1;
-            }
-          });
-        });
-      } else if (typeof rawData === 'object') {
-        // 2. 객체 형태일 때: { iron: 4, gold: 2 } -> 선언된 숫자 값을 직접 맵핑
-        debugRawString = JSON.stringify(rawData);
-        Object.keys(rawData).forEach(k => {
-          const name = k.toLowerCase().trim();
-          const value = Number(rawData[k]);
-          Object.keys(resourceCounts).forEach(key => {
-            if (name.includes(key) && !isNaN(value)) {
-              resourceCounts[key] += value;
-            }
-          });
-        });
-      } else {
-        // 3. 문자열 형태일 때: "grain, iron, grain" -> 단어 등장 빈도나 숫자 매칭 파싱
-        const strVal = String(rawData).toLowerCase();
-        debugRawString = strVal;
-        Object.keys(resourceCounts).forEach(key => {
-          // 단순 쉼표 분할 기반 빈도 측정 fallback
-          const matches = strVal.split(key).length - 1;
-          if (matches > 0) {
-            // 만약 "iron: 5" 처럼 숫자가 포함되어 있는지 정규식 체크 후 가중치 부여
-            const regex = new RegExp(`${key}\\s*[:=]\\s*(\\d+)`);
-            const matchResult = strVal.match(regex);
-            if (matchResult && matchResult[1]) {
-              resourceCounts[key] = parseInt(matchResult[1], 10);
-            } else {
-              resourceCounts[key] = matches;
-            }
-          }
+  // 🎨 6가지 세력 색상 매핑 라이브러리
+  function getFactionColor(factionName: string | null): string {
+    if (!factionName) return '#555566'; 
+    const colors: Record<string, string> = {
+      'Ashirglen':      '#e05c5c', 
+      'Duskveil':       '#b65ce0', 
+      'Stormfall':      '#5cc6e0', 
+      'Ironenmark':     '#e0b65c', 
+      'Stormkelwound':  '#73e05c'  
+    };
+    return colors[factionName] || '#888899';
+  }
+
+  const getRelationStyle = (score: number) => {
+    const pct = Math.min(Math.max((score + 1) * 50, 0), 100);
+    let color = '#7a7a90';
+    if (score > 0.2) color = '#5ce0b6';
+    else if (score < -0.2) color = '#e05c5c';
+    return { pct, color };
+  };
+
+  // 🔍 마우스 드래그 이동 (Pan) 핸들러
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if ((e.target as HTMLElement).tagName === 'circle' || (e.target as HTMLElement).tagName === 'text') return;
+    setIsDragging(true);
+    setDragStart({ x: e.clientX - zoom.x, y: e.clientY - zoom.y });
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (isDragging) {
+      setZoom(prev => ({
+        ...prev,
+        x: e.clientX - dragStart.x,
+        y: e.clientY - dragStart.y
+      }));
+    }
+    // 툴팁 위치를 갱신 마우스 위치 기반 트래킹
+    if (hoveredNode) {
+      const bounds = mainPanelRef.current?.getBoundingClientRect();
+      if (bounds) {
+        setTooltipPos({
+          x: e.clientX - bounds.left + 15,
+          y: e.clientY - bounds.top + 15
         });
       }
     }
-
-    const targetResources = ['grain', 'iron', 'timber', 'gold'];
-    
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '4px' }}>
-        {targetResources.map((res) => {
-          const count = resourceCounts[res];
-          const hasResource = count > 0;
-          
-          const labelMap: Record<string, { name: string, color: string, icon: string }> = {
-            grain: { name: '곡물 (Grain)', color: '#eab308', icon: '🌾' },
-            iron: { name: '철광 (Iron)', color: '#64748b', icon: '⛏️' },
-            timber: { name: '목재 (Timber)', color: '#15803d', icon: '🪵' },
-            gold: { name: '황금 (Gold)', color: '#d97706', icon: '🪙' }
-          };
-
-          return (
-            <div key={`res-item-${res}`} style={{ display: 'flex', alignItems: 'center', gap: '6px', opacity: hasResource ? 1 : 0.35 }}>
-              <span>{labelMap[res].icon}</span>
-              <span style={{ fontWeight: hasResource ? 'bold' : 'normal', color: hasResource ? labelMap[res].color : '#94a3b8' }}>
-                {labelMap[res].name}: 
-              </span>
-              <span style={{ 
-                fontSize: '0.85rem', 
-                fontWeight: '900', 
-                color: hasResource ? '#111827' : '#94a3b8',
-                backgroundColor: hasResource ? '#e2e8f0' : 'transparent',
-                padding: hasResource ? '1px 6px' : '0',
-                borderRadius: '4px'
-              }}>
-                {count}
-              </span>
-            </div>
-          );
-        })}
-        <div style={{ fontSize: '0.65rem', color: '#cbd5e1', marginTop: '6px' }}>
-          데이터 원본 원시 로그: {debugRawString || 'None'}
-        </div>
-      </div>
-    );
   };
 
-  // 공백 클릭 핸들러
-  const handleBackgroundClick = (e: React.MouseEvent) => {
-    if (e.target === e.currentTarget) {
-      setSelectedNodeId(null);
+  const handleMouseUpOrLeave = () => {
+    setIsDragging(false);
+  };
+
+  // 🖱️ 노드 마우스 이벤트 핸들러 (정보창 팝업용)
+  const handleNodeMouseEnter = (e: React.MouseEvent, node: WorldNode) => {
+    setHoveredNode(node);
+    const bounds = mainPanelRef.current?.getBoundingClientRect();
+    if (bounds) {
+      setTooltipPos({
+        x: e.clientX - bounds.left + 15,
+        y: e.clientY - bounds.top + 15
+      });
     }
   };
 
+  const handleNodeMouseLeave = () => {
+    setHoveredNode(null);
+  };
+
+  const zoomIn = () => setZoom(prev => ({ ...prev, scale: Math.min(prev.scale * 1.25, 8) }));
+  const zoomOut = () => setZoom(prev => ({ ...prev, scale: Math.max(prev.scale / 1.25, 0.4) }));
+  const resetZoom = () => setZoom({ scale: 1, x: 0, y: 0 });
+
+  // 기록관 해설 박스 텍스트 계산
+  const renderNarrationContent = () => {
+    const currentEvent = timelineEvents.find(e => e.id === activeEventId);
+    if (!currentEvent) return "📝 특기할 사항 없음";
+
+    if (snapshot && snapshot.narration) {
+      if (typeof snapshot.narration === 'object') {
+        return (snapshot.narration as NarrationObject).narration_text || currentEvent.description;
+      }
+      return snapshot.narration;
+    }
+    return currentEvent.description || "📝 특기할 사항 없음";
+  };
+
+  // 현재 선택된 이벤트 오브젝트 구하기
+  const currentActiveEvent = timelineEvents.find(e => e.id === activeEventId);
+
   return (
-    <div className="full-page-container">
+    <div style={{
+      boxSizing: 'border-box', margin: 0, padding: 0, height: '100vh', width: '100vw',
+      backgroundColor: '#0f0f14', color: '#d4d4e0', fontFamily: "'Segoe UI', system-ui, sans-serif",
+      fontSize: '14px', overflow: 'hidden',
+      display: 'grid',
+      gridTemplateRows: '52px 1fr 260px',
+      gridTemplateColumns: '350px 1fr',
+      gridTemplateAreas: '"header header" "sidebar main" "sidebar bottom"'
+    }}>
       
-      {/* ─── 🗺️ [왼쪽 구역] Live 월드맵 시각화 ─── */}
-      <main className="main-content">
-        <header className="main-header">
-          <h1 style={{ fontSize: '1.3rem', fontWeight: '900', margin: 0, color: '#111827' }}>
-            HISTORY_ENGINE // LIVE WORLD MAP VISUALIZER
-          </h1>
-          <p style={{ margin: '4px 0 0 0', fontSize: '0.8rem', color: '#6b7280' }}>
-            SEED: {worldData?.seed} | THEME: {worldData?.theme}
-          </p>
-        </header>
+      {/* ── HEADER ── */}
+      <header style={{
+        gridArea: 'header', display: 'flex', alignItems: 'center', gap: '16px', padding: '0 20px',
+        background: '#17171f', borderBottom: '1px solid #2a2a38', whiteSpace: 'nowrap', overflow: 'hidden'
+      }}>
+        <span style={{ fontSize: '15px', fontWeight: 600, color: '#eeeef8' }}>⚔️ 역사적 가상 시뮬레이션 타임라인 엔진</span>
+        <div style={{ fontSize: '12px', color: '#7a7a90', display: 'flex', gap: '18px', alignItems: 'center' }}>
+          <span style={{ background: '#5c9ee0', padding: '2px 8px', borderRadius: '4px', fontSize: '11px', color: '#fff', fontWeight:'bold' }}>FINE-GRAINED CHRONICLE</span>
+          {currentActiveEvent && <span>조회 중인 시점: <b style={{ color: '#5c9ee0' }}>{currentActiveEvent.turn} 턴 (이벤트 고유 번호: #{currentActiveEvent.id})</b></span>}
+        </div>
+      </header>
 
-        <div 
-          ref={viewportRef}
-          className="graph-viewport" 
-          style={{ overflow: 'auto', position: 'relative', width: '100%', height: '100%' }}
-        >
-          <div 
-            onClick={handleBackgroundClick}
-            style={{ 
-              transform: `scale(${zoomScale})`, 
-              transformOrigin: 'top left',
-              transition: 'transform 0.1s ease-out',
-              width: '1400px', 
-              height: '1000px',
-              position: 'relative',
-              backgroundSize: '40px 40px',
-              backgroundImage: 'linear-gradient(to right, #f1f5f9 1px, transparent 1px), linear-gradient(to bottom, #f1f5f9 1px, transparent 1px)',
-              cursor: 'default'
-            }}
-          >
-            {/* 🔗 관계선 레이어 */}
-            <svg style={{ position: 'absolute', width: '100%', height: '100%', pointerEvents: 'none', zIndex: 1 }}>
-              {edges.map((edge, index) => {
-                const sourceId = edge.source !== undefined && edge.source !== null ? String(edge.source) : '';
-                const targetId = edge.target !== undefined && edge.target !== null ? String(edge.target) : '';
-
-                const sourceNode = positionedNodes.find(n => String(n.id) === sourceId);
-                const targetNode = positionedNodes.find(n => String(n.id) === targetId);
-                if (!sourceNode || !targetNode) return null;
-                return (
-                  <line
-                    key={`edge-${index}`}
-                    x1={sourceNode.x}
-                    y1={sourceNode.y}
-                    x2={targetNode.x}
-                    y2={targetNode.y}
-                    stroke="#cbd5e1"
-                    strokeWidth="2.5"
-                    strokeDasharray="4,4"
-                  />
-                );
-              })}
-            </svg>
-
-            {/* 🟠 국가 노드 레이어 */}
-            {positionedNodes.map((node) => {
-              const isSelected = selectedNodeId !== null && String(selectedNodeId) === String(node.id);
-              const currentFixedId = String(node.id); 
-
-              return (
-                <div
-                  key={`map-node-${currentFixedId}`}
-                  onClick={(e) => {
-                    e.stopPropagation(); 
-                    setSelectedNodeId(currentFixedId);
-                  }}
-                  style={{
-                    position: 'absolute',
-                    left: `${node.x}px`,
-                    top: `${node.y}px`,
-                    transform: 'translate(-50%, -50%)',
-                    zIndex: 2,
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    cursor: 'pointer'
-                  }}
-                >
-                  <div
-                    style={{
-                      width: isSelected ? '32px' : '24px',
-                      height: isSelected ? '24px' : '24px',
-                      backgroundColor: node.color || '#3b82f6',
-                      borderRadius: '50%',
-                      border: isSelected ? '4px solid #111827' : '3px solid #ffffff',
-                      boxShadow: isSelected ? '0 0 12px rgba(0,0,0,0.4)' : '0 4px 6px rgba(0,0,0,0.15)',
-                      transition: 'all 0.15s ease-out'
-                    }}
-                  />
-                  <span
-                    style={{
-                      marginTop: '6px',
-                      backgroundColor: isSelected ? '#111827' : 'rgba(255, 255, 255, 0.95)',
-                      padding: '2px 8px',
-                      borderRadius: '4px',
-                      fontSize: '0.8rem',
-                      fontWeight: 'bold',
-                      color: isSelected ? '#ffffff' : '#0f172a',
-                      border: '1px solid #cbd5e1',
-                      whiteSpace: 'nowrap',
-                      boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
-                    }}
-                  >
-                    {node.name} {node.is_capital ? '👑' : ''}
+      {/* ── SIDEBAR (개별 이벤트 독립 리스트 구성) ── */}
+      <aside style={{ gridArea: 'sidebar', display: 'flex', flexDirection: 'column', background: '#17171f', borderRight: '1px solid #2a2a38', overflow: 'hidden' }}>
+        <div style={{ padding: '12px 14px', fontSize: '11px', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: '0.08em', color: '#eeeef8', borderBottom: '1px solid #2a2a38', background: '#0f0f14' }}>
+          📜 개별 사건 기록 저널 목록 ({timelineEvents.length})
+        </div>
+        <div style={{ overflowY: 'auto', flex: 1, padding: '2px 0' }}>
+          {timelineEvents.map((evt) => {
+            const isSelected = activeEventId === evt.id;
+            return (
+              <button
+                key={evt.id}
+                onClick={() => setActiveEventId(evt.id)}
+                style={{
+                  width: '100%', textAlign: 'left', border: 'none', 
+                  background: isSelected ? '#252530' : 'transparent',
+                  padding: '12px 14px', cursor: 'pointer', borderBottom: '1px solid #2a2a38',
+                  borderLeft: `4px solid ${isSelected ? '#5c9ee0' : 'transparent'}`, 
+                  transition: 'background 100ms'
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                  <span style={{ fontSize: '11px', color: isSelected ? '#5c9ee0' : '#7a7a90', fontFamily: 'monospace', fontWeight: 'bold' }}>
+                    TURN {evt.turn.toString().padStart(3, '0')} (ID: #{evt.id})
+                  </span>
+                  <span style={{ fontSize: '10px', background: isSelected ? '#5c9ee0' : '#23232f', color: isSelected ? '#fff' : '#cbd5e1', padding: '1px 5px', borderRadius: '3px', fontWeight: '600' }}>
+                    {evt.event_type}
                   </span>
                 </div>
-              );
-            })}
-          </div>
+                <div style={{ fontSize: '12px', fontWeight: 700, color: '#eeeef8', marginBottom: '2px' }}>
+                  {evt.actor}
+                </div>
+                <div style={{ fontSize: '11px', color: '#7a7a90', overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
+                  {evt.description}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </aside>
 
-          {/* 확대/축소 패널 */}
-          <div 
-            style={{
-              position: 'fixed',
-              bottom: '24px',
-              right: '384px',
-              display: 'flex',
-              gap: '8px',
-              background: 'white',
-              padding: '8px',
-              borderRadius: '8px',
-              boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-              zIndex: 10,
-              transition: 'right 0.2s ease-out'
-            }}
-          >
-            <button className="zoom-btn" onClick={handleZoomOut}>-</button>
-            <span className="zoom-info" onClick={handleZoomReset} style={{ cursor: 'pointer', userSelect: 'none', fontWeight: 'bold' }}>
-              {Math.round(zoomScale * 100)}%
-            </span>
-            <button className="zoom-btn" onClick={handleZoomIn}>+</button>
+      {/* ── MAIN WORKSPACE (SVG GRAPH VIEW) ── */}
+      <main 
+        ref={mainPanelRef}
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUpOrLeave}
+        onMouseLeave={handleMouseUpOrLeave}
+        style={{ 
+          gridArea: 'main', position: 'relative', background: '#0f0f14', overflow: 'hidden',
+          cursor: isDragging ? 'grabbing' : 'grab'
+        }}
+      >
+        <div style={{ width: '100%', height: '100%' }}>
+          <svg width="100%" height="100%" viewBox="0 0 800 580" style={{ display: 'block' }}>
+            <g transform={`translate(${zoom.x}, ${zoom.y}) scale(${zoom.scale})`}>
+              
+              {/* 노드 간 연결선 삭제 완료 */}
+
+              {/* 영토 노드 그리기 */}
+              {snapshot?.world_snapshot?.map((node, idx) => {
+                const def = { x: 100 + (idx * 85) % 600, y: 120 + (idx * 55) % 350 };
+                const posX = node.x ?? def.x;
+                const posY = node.y ?? def.y;
+                const nColor = getFactionColor(node.owner);
+
+                return (
+                  <g 
+                    key={node.name} 
+                    transform={`translate(${posX}, ${posY})`}
+                    onMouseEnter={(e) => handleNodeMouseEnter(e, node)} 
+                    onMouseLeave={handleNodeMouseLeave}               
+                    style={{ cursor: 'pointer' }}
+                  >
+                    <circle
+                      r={node.is_capital ? 13 : 8}
+                      fill={nColor} stroke="#ffffff" strokeWidth={node.is_capital ? "2.5" : "1.5"}
+                      style={{ transition: 'transform 150ms', transform: hoveredNode?.name === node.name ? 'scale(1.2)' : 'none' }}
+                    />
+                    <text y={node.is_capital ? -19 : -14} textAnchor="middle" fill="#f8fafc" fontSize={11 / Math.sqrt(zoom.scale)} fontWeight={node.is_capital ? "bold" : "normal"}>
+                      {node.name} {node.is_capital && '👑'}
+                    </text>
+                  </g>
+                );
+              })}
+            </g>
+          </svg>
+        </div>
+
+        {/* 🛠️ 문법 오류 해결 완료 파트: 노드 정보창 팝업 UI (Tooltip) */}
+        {hoveredNode && (
+          <div style={{
+            position: 'absolute', 
+            left: `${tooltipPos.x}px`, 
+            top: `${tooltipPos.y}px`,
+            transform: 'translate(0, 0)', zIndex: 100, pointerEvents: 'none',
+            background: 'rgba(23, 23, 31, 0.96)', border: `1px solid ${getFactionColor(hoveredNode.owner)}`,
+            borderRadius: '6px', padding: '12px', minWidth: '220px',
+            boxShadow: '0 8px 24px rgba(0,0,0,0.5)', backdropFilter: 'blur(4px)'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px', borderBottom: '1px solid #2a2a38', paddingBottom: '4px' }}>
+              <span style={{ fontSize: '14px', fontWeight: 'bold', color: '#fff' }}>{hoveredNode.name}</span>
+              {hoveredNode.is_capital && <span style={{ fontSize: '10px', background: '#e0b65c', color: '#0f0f14', padding: '1px 4px', borderRadius: '3px', fontWeight: 'bold' }}>수도 👑</span>}
+            </div>
+            
+            <div style={{ fontSize: '11px', color: '#7a7a90', marginBottom: '8px' }}>
+              소유 세력: <span style={{ color: getFactionColor(hoveredNode.owner), fontWeight: 'bold' }}>{hoveredNode.owner || '중립 영토 (Neutral)'}</span>
+            </div>
+
+            {/* 자원 상태 내역 */}
+            <div style={{ marginBottom: '6px' }}>
+              <div style={{ fontSize: '10px', fontWeight: 'bold', color: '#7a7a90', textTransform: 'uppercase', marginBottom: '2px' }}>📊 보유 자원</div>
+              {hoveredNode.resources && Object.keys(hoveredNode.resources).length > 0 ? (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', fontSize: '11px' }}>
+                  {Object.entries(hoveredNode.resources).map(([resName, val]) => (
+                    <span key={resName} style={{ background: '#1e1e28', padding: '2px 5px', borderRadius: '3px', color: '#eeeef8' }}>
+                      {resName}: <b>{typeof val === 'number' ? val.toFixed(0) : String(val)}</b>
+                    </span>
+                  ))}
+                </div>
+              ) : (
+                <div style={{ fontSize: '11px', color: '#555566', fontStyle: 'italic' }}>자원 데이터 없음</div>
+              )}
+            </div>
+
+            {/* 영토 특징 */}
+            <div>
+              <div style={{ fontSize: '10px', fontWeight: 'bold', color: '#7a7a90', textTransform: 'uppercase', marginBottom: '2px' }}>⛰️ 지역 특징</div>
+              {hoveredNode.features && hoveredNode.features.length > 0 ? (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '3px' }}>
+                  {hoveredNode.features.map((feat, idx) => (
+                    <span key={idx} style={{ background: '#252530', color: '#5c9ee0', fontSize: '10px', padding: '1px 4px', borderRadius: '3px' }}>
+                      #{feat}
+                    </span>
+                  ))}
+                </div>
+              ) : (
+                <div style={{ fontSize: '11px', color: '#555566', fontStyle: 'italic' }}>특징적 지형 없음</div>
+              )}
+            </div>
           </div>
+        )}
+
+        {/* 플로팅 줌 컨트롤러 패널 */}
+        <div style={{
+          position: 'absolute', top: '16px', right: '16px', display: 'flex', flexDirection: 'column',
+          gap: '6px', background: '#17171f', border: '1px solid #2a2a38', padding: '6px', borderRadius: '6px', zIndex: 10
+        }}>
+          <button onClick={zoomIn} style={{ width: '32px', height: '32px', background: '#252530', border: '1px solid #2a2a38', color: '#eeeef8', cursor: 'pointer', borderRadius: '4px', fontWeight: 'bold' }}>+</button>
+          <button onClick={zoomOut} style={{ width: '32px', height: '32px', background: '#252530', border: '1px solid #2a2a38', color: '#eeeef8', cursor: 'pointer', borderRadius: '4px', fontWeight: 'bold' }}>−</button>
+          <button onClick={resetZoom} style={{ width: '32px', height: '32px', background: '#252530', border: '1px solid #2a2a38', color: '#5c9ee0', cursor: 'pointer', borderRadius: '4px', fontSize: '11px', fontWeight: 'bold' }}>리셋</button>
         </div>
       </main>
 
-      {/* ─── 📦 [오른쪽 구역] 사이드바 전체 레이아웃 ─── */}
-      <aside className="sidebar-right">
+      {/* ── BOTTOM DASHBOARD PANELS ── */}
+      <section style={{
+        gridArea: 'bottom', background: '#17171f', borderTop: '1px solid #2a2a38',
+        display: 'grid', gridTemplateColumns: '1fr 260px 240px', overflow: 'hidden'
+      }}>
         
-        <section className="turn-select-zone" style={{ height: '25%', minHeight: '180px', overflowY: 'auto' }}>
-          <h3 style={{ fontSize: '0.9rem', fontWeight: 'bold', color: '#111827', margin: '0 0 12px 0' }}>
-            ⏱️ 턴 선택 구역 ({turns.length}개 턴 검색됨)
-          </h3>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            {turns.map((turn) => (
-              <button
-                key={`turn-btn-${turn.id}`}
-                onClick={() => setSelectedTurn(turn.id)}
-                style={{
-                  textAlign: 'left',
-                  padding: '10px 12px',
-                  background: selectedTurn === turn.id ? '#111827' : '#ffffff',
-                  color: selectedTurn === turn.id ? '#ffffff' : '#374151',
-                  border: '1px solid #d1d5db',
-                  borderRadius: '6px',
-                  cursor: 'pointer',
-                  fontSize: '0.82rem',
-                  fontWeight: selectedTurn === turn.id ? 'bold' : 'normal',
-                  transition: 'all 0.1s ease',
-                  whiteSpace: 'nowrap',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis'
-                }}
-              >
-                {selectedTurn === turn.id ? '📍 ' : ''}{turn.title}
-              </button>
-            ))}
+        {/* 서사 연대기 연동 해설 */}
+        <div style={{ padding: '14px 16px', overflowY: 'auto', borderRight: '1px solid #2a2a38' }}>
+          <div style={{ fontSize: '10px', fontWeight: 'bold', color: '#7a7a90', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px', borderBottom: '1px solid #2a2a38', paddingBottom: '4px' }}>
+            📜 기록관의 연대기 해설 (NARRATION)
           </div>
-        </section>
-
-        {/* 📋 국가 세부 정보 연동 구역 */}
-        <section style={{ padding: '16px 20px', borderBottom: '2px solid #111827', backgroundColor: '#f8fafc', height: '35%', overflowY: 'auto' }}>
-          <h3 style={{ fontSize: '0.9rem', fontWeight: 'bold', color: '#111827', margin: '0 0 10px 0' }}>
-            🔍 선택된 국가 세부 정보
-          </h3>
-          {activeNodeDetails ? (
-            <div style={{ fontSize: '0.8rem', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              <p style={{ margin: 0 }}><strong>국가명:</strong> <span style={{ color: activeNodeDetails.color, fontWeight: 'bold' }}>{activeNodeDetails.name}</span></p>
-              <p style={{ margin: 0 }}><strong>ID:</strong> {activeNodeDetails.id} | <strong>좌표:</strong> ({Math.round(activeNodeDetails.x || 0)}, {Math.round(activeNodeDetails.y || 0)})</p>
-              <p style={{ margin: 0 }}><strong>수도 여부 (is_capital):</strong> {activeNodeDetails.is_capital ? '👑 Yes (Capital)' : '❌ No'}</p>
-              
-              <div style={{ marginTop: '4px', borderTop: '1px dashed #cbd5e1', paddingTop: '6px' }}>
-                <p style={{ margin: '0 0 2px 0' }}><strong>특징 (features):</strong></p>
-                <span style={{ color: '#0284c7', fontWeight: '500' }}>{renderAttribute(activeNodeDetails.features)}</span>
-              </div>
-
-              {/* 자원 분석 출력기 연동 */}
-              <div>
-                <p style={{ margin: '0 0 2px 0' }}><strong>자원 현황 (resources):</strong></p>
-                {renderCategorizedResources(activeNodeDetails)}
-              </div>
-
-              <div style={{ marginTop: '4px' }}>
-                <p style={{ margin: '0 0 2px 0' }}><strong>탐색 주체 (explored_by):</strong></p>
-                <span style={{ color: '#4b5563', fontStyle: 'italic' }}>{renderAttribute(activeNodeDetails.explored_by)}</span>
-              </div>
-            </div>
-          ) : (
-            <p style={{ margin: 0, fontSize: '0.8rem', color: '#94a3b8', lineHeight: '1.5' }}>
-              지도의 동그라미 노드를 클릭하면 해당 월드의 속성(features, resources 등)이 여기에 실시간 표출됩니다.
-            </p>
-          )}
-        </section>
-
-        {/* 👇 턴 진행 상황 리포트 구역 */}
-        <section className="turn-progress-zone" style={{ height: '40%', flexGrow: 1 }}>
-          <h3 style={{ fontSize: '0.9rem', fontWeight: 'bold', color: '#111827', margin: 0 }}>
-            📊 턴 진행 상황 및 결과 리포트
-          </h3>
-          
-          <div style={{ background: '#ffffff', padding: '8px 12px', borderRadius: '6px', border: '1px solid #e5e7eb', fontSize: '0.82rem' }}>
-            <strong>동기화 타깃:</strong> <span style={{ color: '#2563eb', fontWeight: 'bold' }}>{currentTurnData ? currentTurnData.title : `Turn ${selectedTurn}`}</span>
+          <div style={{ fontSize: '13px', lineHeight: '1.7', color: '#cbd5e1', whiteSpace: 'pre-wrap' }}>
+            {renderNarrationContent()}
           </div>
+        </div>
 
-          <div style={{ 
-            fontSize: '0.82rem', 
-            color: '#1e293b', 
-            lineHeight: '1.5', 
-            whiteSpace: 'pre-wrap', 
-            backgroundColor: '#ffffff', 
-            padding: '12px', 
-            borderRadius: '6px', 
-            border: '1px solid #e5e7eb', 
-            flexGrow: 1, 
-            overflowY: 'auto',
-            fontFamily: 'monospace'
-          }}>
-            {currentTurnData ? currentTurnData.content : "표출할 마크다운 로그 본문이 존재하지 않습니다."}
+        {/* 세력권 스탯 현황 */}
+        <div style={{ padding: '14px 16px', overflowY: 'auto', borderRight: '1px solid #2a2a38' }}>
+          <div style={{ fontSize: '10px', fontWeight: 'bold', color: '#7a7a90', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px', borderBottom: '1px solid #2a2a38', paddingBottom: '4px' }}>
+            👑 세력권 스탯 현황 (ENTITIES)
           </div>
-        </section>
+          <div>
+            {snapshot ? (
+              snapshot.entity_snapshot?.map((ent) => (
+                <div key={ent.name} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '5px 0', borderBottom: '1px solid #2a2a38' }}>
+                  <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: getFactionColor(ent.name) }} />
+                  <span style={{ fontSize: '12px', fontWeight: 500, color: ent.alive ? '#eeeef8' : '#7a7a90', textDecoration: ent.alive ? 'none' : 'line-through', flex: 1, overflow:'hidden', textOverflow:'ellipsis' }}>
+                    {ent.name}
+                  </span>
+                  <span style={{ fontSize: '11px', color: '#7a7a90', background: '#0f0f14', padding: '1px 5px', borderRadius: '3px', fontFamily: 'monospace' }}>
+                    {ent.alive ? `영토 ${ent.node_count}개` : '멸망'}
+                  </span>
+                </div>
+              ))
+            ) : (
+              <div style={{ color: '#555566', fontStyle: 'italic', fontSize: '12px', marginTop: '10px' }}>스냅샷 데이터 없음</div>
+            )}
+          </div>
+        </div>
 
-      </aside>
+        {/* 외교 관계 현황 */}
+        <div style={{ padding: '14px 16px', overflowY: 'auto' }}>
+          <div style={{ fontSize: '10px', fontWeight: 'bold', color: '#7a7a90', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px', borderBottom: '1px solid #2a2a38', paddingBottom: '4px' }}>
+            🤝 외교 관계 현황 (RELATIONS)
+          </div>
+          <div>
+            {snapshot?.relations_snapshot ? (
+              Object.entries(snapshot.relations_snapshot).flatMap(([actor, targets]) => 
+                Object.entries(targets).map(([target, score]) => {
+                  if (actor >= target) return null;
+                  const { pct, color } = getRelationStyle(score);
+                  return (
+                    <div key={`${actor}-${target}`} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '4px 0', borderBottom: '1px solid #2a2a38', fontSize: '11px' }}>
+                      <div style={{ flex: 1, color: '#d4d4e0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {actor.substring(0,5)} ↔ {target.substring(0,5)}
+                      </div>
+                      <div style={{ width: '46px', height: '5px', background: '#0f0f14', borderRadius: '3px', overflow: 'hidden' }}>
+                        <div style={{ height: '100%', width: `${pct}%`, background: color }} />
+                      </div>
+                      <div style={{ fontFamily: 'monospace', width: '32px', textAlign: 'right', color: color, fontWeight: 'bold' }}>
+                        {score > 0 ? `+${score.toFixed(1)}` : score.toFixed(1)}
+                      </div>
+                    </div>
+                  );
+                })
+              )
+            ) : (
+              <div style={{ color: '#555566', fontStyle: 'italic', fontSize: '11px', marginTop: '10px' }}>
+                외교 스냅샷 없음
+              </div>
+            )}
+          </div>
+        </div>
 
+      </section>
     </div>
   );
 }
-
-export default App;

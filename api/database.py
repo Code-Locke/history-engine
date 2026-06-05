@@ -14,7 +14,7 @@ from .models import Base
 
 load_dotenv()
 
-DEFAULT_DATABASE_URL = "postgresql+psycopg2://postgres:postgres@localhost:5432/history_engine"
+DEFAULT_DATABASE_URL = "postgresql+psycopg2://postgres:welsh9731@localhost:5432/history_engine"
 DATABASE_URL = os.getenv("DATABASE_URL", DEFAULT_DATABASE_URL)
 
 engine = create_engine(DATABASE_URL, future=True)
