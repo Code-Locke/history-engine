@@ -141,6 +141,13 @@ python -m engine.main --prompt-only
 
 # Generate HTML report from last run
 python report.py
+
+# Run backend API server (프론트엔드 대시보드에 시뮬레이션 이벤트 및 스냅샷 데이터를 공급하는 Fast API 서버 구동)
+uvicorn api.main:app --reload
+
+# Run frontend development server (Vite 기반의 React 대시보드 웹 UI 애플리케이션을 개발 모드로 실행)
+npm run dev
+
 ```
 
 ---
