@@ -146,6 +146,7 @@ python report.py
 uvicorn api.main:app --reload
 
 # Run frontend development server (Vite 기반의 React 대시보드 웹 UI 애플리케이션을 개발 모드로 실행)
+cd frontend
 npm run dev
 
 ```
